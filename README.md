@@ -26,7 +26,7 @@ Original work by [Adrian Cantrill](https://www.youtube.com/@LearnCantrill/videos
 - This will load the web application running on the on-premises environment.
 ![Webpage served from onpremises](https://github.com/chimezdev/onpremises-to-aws-database-migration/blob/main/Images/webpage.png)
 
-## STAGE 2 - Create a VPC peering connection between the On-premises and AWS Environments
+## STAGE 2A - Create a VPC peering connection between the On-premises and AWS Environments
 In production, a Direct Connect or a VPN would be used but here you are going to simulate it using VPC Peering to configure the connection between the two environments.
 - Navigate to the AWS VPC console and click on ***Your VPCs***
 - In addition to the default vpc, you will see the ***awsVPC*** and ***onpremVPC*** running in **IPv4 CIDR** ranges ***10.16.0.0/16*** and ***192.168.10.0/24*** respectively.
@@ -36,4 +36,19 @@ In production, a Direct Connect or a VPN would be used but here you are going to
     - choose *onpremVPC* as *VPC(Requester)* and *awsVPC* as *VPC(Accepter)*
     - scroll down and click ***Create Peering Connection***
     - both the *Requester* and Accepter VPCs are on the same AWS account, as such click on *Actions* then *Accept Request*
+
+## STAGE 2B - Configure Routing in each VPC to send traffic to each other
+1. Configure Routes on the On-premises side VPC route by editing the route table
+    - click on ***Route tables*** on the left menu of the VPC console
+    - select the `onpremPublicRT`, click on the `Routes` tab and then click on `Edit routes` 
+    - click on `Add route`, copy and paste the *IPv4 CIDR* of the `awsVPC`
+    - as Target, click on the dropdown and select ***Peering Connection to automatically select the peering connection created earlier.
+    - click on `Save changes`
+
+2. Configure Route on the AWS Side VPC by editing the route table
+    there are 2 route tables on the AWS Side, (Private and Public)
+    - select the `awspublicRT` and repeat the above steps to add a route using the `onpremVPC` `IPv4 CIDR` 
+    - repeat the process for the `awsPrivateRT` using the `onpremVPC` `IPv4 CIDR`
+At the stage we have configured gateway object and route table in both VPCs so both environment can communicate 
+
 
