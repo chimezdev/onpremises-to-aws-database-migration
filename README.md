@@ -27,7 +27,7 @@ Original work by [Adrian Cantrill](https://www.youtube.com/@LearnCantrill/videos
 ![Webpage served from onpremises](https://github.com/chimezdev/onpremises-to-aws-database-migration/blob/main/Images/webpage.png)
 
 ## STAGE 2A - Create a VPC peering connection between the On-premises and AWS Environments
-In production, a Direct Connect or a VPN would be used but here you are going to simulate it using VPC Peering to configure the connection between the two environments.
+In production, a Direct Connect or a VPN [used here](https://github.com/chimezdev/aws-bgp-site2site-vpn-connection) would be used but here you are going to simulate it using VPC Peering to configure the connection between the two environments.
 - Navigate to the AWS VPC console and click on ***Your VPCs***
 - In addition to the default vpc, you will see the ***awsVPC*** and ***onpremVPC*** running in **IPv4 CIDR** ranges ***10.16.0.0/16*** and ***192.168.10.0/24*** respectively.
 ![Created VPCs](https://github.com/chimezdev/onpremises-to-aws-database-migration/blob/main/Images/Your_VPCs.png)
@@ -94,6 +94,7 @@ At the stage we have configured gateway object and route table in both VPCs so b
     - select the awsCatWeb instance, click on *connect* 
     - on the **SSH client** tab copy the ssh command `ssh -i "your_keypair_name.pem" ec2-user@ec2-52-87-209-171.compute-1.amazonaws.com` 
     - open you terminal in my case, a linux terminal and run the command
+    ![ssh to instance](https://github.com/chimezdev/onpremises-to-aws-database-migration/blob/main/Images/sshed_ec2.png)
     - alternatively, you can connect using the `Session Manager` tab - `connect`
     - when you are connected to your linux machine run `sudo bash` for root permission.
     - run `yum -y update` to update the machine
@@ -105,7 +106,7 @@ At the stage we have configured gateway object and route table in both VPCs so b
     ```
 With this, we have a running apache web server ready to connect to our wordpress database.
 
-## STAGE 3D - Migrate wordpress content over
+## STAGE 3C - Migrate wordpress content over
 - first we need to edit the SSH config on this machine to allow password authentication temporarily so we can copy the wordpress data across to the `awsCatWeb` machine from the on-premises `CatWeb` Machine
 - run `nano /etc/ssh/sshd_config` to open the file with nano
 - scroll dow using you device arrow key to the line `PasswordAuthentication no` and change to `PasswordAuthentication yes`
@@ -137,8 +138,128 @@ With this, we have a running apache web server ready to connect to our wordpress
     ```
 - go back to the ec2 console, copy the `public IPv4 DNS` and open in a new tab.
 - If it is working, it means we have successfully migrated the web application from on-premise to aws instance which is still loading and pointing to the on-premises database. In the next stage, we will migrate the database 
+[webpage](https://github.com/chimezdev/onpremises-to-aws-database-migration/blob/main/Images/webpage_aws.png)
 
+## STAGE 4 - Migrate the database from the CatDB on-premises database to the RDS-MariaDB provissioned in stage 3A above using DMS
+1. Create subnet group
+    - Search and click **DMS** to navigate to **AWS DMS** console
+    - Click on **Subnet groups** on the left menu and then **Create subnet group**
+    - provide `A4LDMSSNGROUP` as *Name* and *Description* 
+    - select the `awsVPC` from the **VPC** dropdown
+    - under `Add subnet` click the dropdown and select `awsPrivateA` and `awsPrivateB` 
+    - click on `Create subnet group`
+2. Create DMS Replication Instance
+    - click on **Replication instances** on the left menu and click on `Create replication instance`
+    - enter `A4LONPREMTOAWS` as **Name** and **Description**
+    - select `dms.t3.micro` as *instance class*
+    - select `Dev or test workload(single-AZ)` under **Multi-AZ**
+    - scroll down to **Connectivity and security** ensure `IPv4` is checked
+    - select `awsVPC` under **Virtual private cloud(VPC) for IPv4**
+    - ensure the `a4ldmssngroup` created earlier is selected under **Replication subnet group** 
+    - deselect ***Public accessible***
+    - click to expand **Advanced setting** and select `DMS-awsSecurityGroup-*` under **VPC security groups** 
+    - click `Create replication instance
+3. Creat the DMS Source and Target Endpoints
+    - Create Source Endpoint
+        - click on **Endpoints** on the left menu and click **Create endpoint**
+        - we are creating the source database endpoint so ensure ***Source endpoint*** is checked and ***Select RDS DB instance** is `NOT` selected
+        - under **Endpoint identifier** enter `CatDBOnpremises` 
+        - **Source engine** should be `MariaDB`
+        - select ***Provide access information manually***
+        - the **Server name** is the *private IPv4 address* of the on-premises database name `CatDB` in our running instance on the EC2 console.
+        - MariaDB port is `3306` so enter this as *Port* 
+        - *username is `a4lwordpress` and password is the same *DBPassword value from the output parameter of our cloudFormation stack.
+        - finally click on `Create endpoint`
+    - Create Target Endpoint
+        - click on **Create endpoint
+        - select `Target endpoint` 
+        - check `Select RDS DB instance` because the **MariaDB** database is RDS-managed
+        - most of the values will be automatically populated
+        - scroll down and select `Provide access information manually`
+        - provide the same **password** only as other fields will be automatically populated
+        - scroll down and click on `create endpoint`
+    - Test Endpoints
+        - go to the RDS console and confirm that the **Replication instance** is **Available** status else wait
+        - select any of the endpoints created 
+        - click on **Actions** - **Test connections** - **Run Test**
+        - if successful the status will change from *testing* to *successful*
+        - repeat for the other endpoint
+4. Migrate Data
+    - Create Database Migration Tasks
+        - click on **Database migration tasks** on the left menu - **Create task**
+        - **Task identifier** = `A4LONPREMTOAWSWORDPRESS`
+        - select the Replication instance created
+        - select the *Source* and *Target* database endpoints from the dropdowns
+        - choose the **Migration type** in this case we are only migrating existing data
+        - scroll down to **Table mappings** and ensure *wizard* editing mode is selected
+        - click on `Add new selection rule` 
+        - click on `Schema`-`Enter a schema` just refers to the database name and the database table
+        - source name we used while creating the database is `a4lwordpress`
+        - use `%` as wildcard under *Source table name* to select all tables in the database
+        - scroll down and click on `Create task`
+        This will go through various *state* from `creating` - `starting` - `Running` and `Load complete` indicating a successful migration
+5. Cutover the web application Instance to now Read/Write to the MariaDB database running on AWS
+    - Navigate to EC2 console and select the `awsCatWeb`
+    - ssh into the instance or connect through the session manager
+    - run `sudo bash` to elevate your permission 
+    - cd to the directory `/var/www/html` which is where the web contents are
+    - if you run `ls` command, you will see the file `wp-config.php`
+    - run `nano wp-config.php` to open the file
+    - goto RDS console, click to open the running database and copy the **endpoint** 
+    - scroll down to `MySQL hostname` change the IP `192.168.10.214` to the replication instance endpoint `a4lwordpress.cb17d2jsxlse.us-east-1.rds.amazonaws.com` 
+    - save and exit
+    - Run the script below, to update the wordpress database with the new instance DNS name
+    ```
+    #!/bin/bash
+    source <(php -r 'require("/var/www/html/wp-config.php"); echo("DB_NAME=".DB_NAME."; DB_USER=".DB_USER."; DB_PASSWORD=".DB_PASSWORD."; DB_HOST=".DB_HOST); ')
+    SQL_COMMAND="mysql -u $DB_USER -h $DB_HOST -p$DB_PASSWORD $DB_NAME -e"
+    OLD_URL=$(mysql -u $DB_USER -h $DB_HOST -p$DB_PASSWORD $DB_NAME -e 'select option_value from wp_options where option_id = 1;' | grep http)
+    HOST=$(curl http://169.254.169.254/latest/meta-data/public-hostname)
+    $SQL_COMMAND "UPDATE wp_options SET option_value = replace(option_value, '$OLD_URL', 'http://$HOST') WHERE option_name = 'home' OR option_name = 'siteurl';"
+    $SQL_COMMAND "UPDATE wp_posts SET guid = replace(guid, '$OLD_URL','http://$HOST');"
+    $SQL_COMMAND "UPDATE wp_posts SET post_content = replace(post_content, '$OLD_URL', 'http://$HOST');"
+    $SQL_COMMAND "UPDATE wp_postmeta SET meta_value = replace(meta_value,'$OLD_URL','http://$HOST');"
+    ```
+    - press `enter` after pasting it to ensure the entire code runs
 
+Navigate to the EC2 console and stop both intances running on-premises `CatDB` and `CatWeb`
+- select each and click `Instance state` - `stop instance`
+Test that our web application still runs
+- select the `awsCatWeb` instance, copy its `Public IPv4 DNS` and open in a new tab. If this loads, it means our web application now points to the RDS instance.
 
+## STAGE 5 - Cleanup You Account
+1. Terminate EC2 Instances
+    - select the `awsCatWeb` which you provissioned manually, right click and `Terminate instance`
+2. Delete Database
+    - navigate to the RDS console
+    - select **Database** on the left menu
+    - select the `a4lwordpress` click on **Actions** - **Delete**
+    - uncheck ***Create final snapshot?*** and ***Retain automated backups*** 
+    - acknowledge and then type `delete me` 
+    - click on `Delete me`
+    - wait for the process to complete before continuing
+    - select *Subnet groups* on the left menu
+    - select the `a4ldbsngroup` we created, click **Delete** - **Delete**
+3. Delete the DMS Service
+    - navigate to the DMS console
+    - select *Database migration tasks* from the left menu
+    - select the `a4lonpremtoawswordpress` task created, click **Actions** - **Delete** - **Delete**
+    - click on *Replication instances* , select `a4lonpremtoaws`, click **Actions** - **Delete** - **Delete**
+    - click on *Endpoints* on the left menu, select one of the endpoints created, click **Actions** - **Delete** - **Delete**
+    - repeat for the other endpoint
+    - if these doesn't delete, simply wait for the replication instace to finish deleting
+    - click on *Subnet groups* on the left menu, select the subnet `a4ldmssngroup`, click on **Actions** - **Delete** - **Delete**
+    - Navigate to the VPC console, select **Route tables** from the left menu
+    - select one of the route created say `awsPublicRT`, click on **Routes** tab - **Edit Routes**, click on **Remove** to remove the route you added
+    - click on *save changes*
+    - repeate for the other two routes
+    - click on **Peering connections** on the left menu
+    - select the peering connection you created, `A4L-ON-PREMISES-TO-AWS`, click **Actions** - **Delete peering connection** 
+    - type *delete* then click on **Delete** to delete
+4. Delete CloudFormation Stack
+    - Navigate to the CloudFormation console
+    - select the `DMS` stack created using the one-click deployment
+    - click on **Delete** - **Delete Stack**. This will clean the rest of the resourses provisioned using the one-click deployment.
 
+*** End of Project ***
 
