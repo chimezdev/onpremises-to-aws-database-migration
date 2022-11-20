@@ -261,5 +261,5 @@ Test that our web application still runs
     - select the `DMS` stack created using the one-click deployment
     - click on **Delete** - **Delete Stack**. This will clean the rest of the resourses provisioned using the one-click deployment.
 
-*** End of Project ***
+***End of Project***
 
